@@ -1,0 +1,9 @@
+*.RDA
+.RData
+*.rds
+*.Rproj
+.Rproj.user/
+.Rhistory
+*.err
+*.out
+
