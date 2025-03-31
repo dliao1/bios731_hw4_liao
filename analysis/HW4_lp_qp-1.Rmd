@@ -10,7 +10,25 @@ urlcolor: blue
 ```{r, include=FALSE}
 
 library(tidyverse)
-knitr::opts_chunk$set(tidy = FALSE)
+library(here)
+library(corrplot)
+library(tidyr)
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(dplyr)
+library(cowplot)
+library(kableExtra)
+library(patchwork)
+library(pheatmap)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 12,
+  fig.height = 5
+)
 ```
 
 ## Context
@@ -68,6 +86,65 @@ Perform some EDA for this data. Your EDA should explore the following questions:
 
 Summarize key findings from your EDA in one paragraph and 2-3 figures or tables. 
 
+```{r}
+cannabis_df <- readRDS(here("data", "cannabis-2.rds"))
+
+cannabis_df
+```
+
+```{r}
+cor_matrix <- cor(cannabis_df %>%
+                    select(-c(id)),
+                  use = "complete.obs")
+corrplot(cor_matrix)
+
+cor_high <- as_tibble(which(upper.tri(cor_matrix) & (abs(cor_matrix) > 0.5), arr.ind = TRUE))
+
+cor_high_df <- tibble(
+  var1 = rownames(cor_matrix)[cor_high$row],
+  var2 = colnames(cor_matrix)[cor_high$col],
+  correlation = cor_matrix[cbind(cor_high$row, cor_high$col)]
+)
+
+kable(cor_high_df)
+```
+
+```{r}
+nrow(cannabis_df)
+ncol(cannabis_df) - 2 # predictors = number of columns - 1 (id col) - 1 (outcome)
+```
+
+```{r}
+hist(cannabis_df$t_mmr1)
+
+t_mmr1_median <- quantile(cannabis_df$t_mmr1)[[3]]
+
+ggplot(cannabis_df, aes(x = h_hr, y = t_mmr1, 
+                        color = ifelse(t_mmr1 > t_mmr1_median, "green", "red"))) +
+  geom_point(size = 3) +
+  scale_color_identity() +
+  labs(title = "h_hr Colored Based on t_mmr1",
+       x = "h_hr",
+       y = "t_mmr1") +
+  theme_minimal()
+
+
+ggplot(cannabis_df, aes(x = i_time_outside_reticle, y = t_mmr1, 
+                        color = ifelse(t_mmr1 > t_mmr1_median, "green", "red"))) +
+  geom_point(size = 3) +
+  scale_color_identity() +
+  labs(title = "i_time_outside_reticle Colored Based on t_mmr1",
+       x = "i_time_outside_reticle",
+       y = "t_mmr1") +
+  theme_minimal()
+
+```
+
+n is 57 for the 57 individuals in the dataset
+p is 27 for the number of predictors (columns in the dataset)
+
+The distribution of the outcome is highly right skewed - looking at the histogram, it looks like the majority of values are 
+clustered by a metabolite molar ratio of THC of 0.
 
 ## Problem 2: Quantile regression
 
@@ -84,6 +161,51 @@ package).
 
 
 When explaining your results, be sure to explain what LP method you used for estimating quantile regression.
+
+
+```{r}
+library(boot)
+my_rq <- function(y, X, tau) {
+  n <- length(y)
+  p <- ncol(X)
+  
+  # See slide 16 of class notes
+  # u <- [yi - xi*beta]+
+  # v <- [yi - xi*beta]-
+  # We need 2*p instead of just p because we're splitting coefficients into
+  # positive and negative
+  
+               #0*b+         #0*b-    # t * ui      #(1 - t)vi
+  obj <- -1 * c(rep(0, p), rep(0, p), rep(tau, n), rep(1 - tau, n))
+  
+  # Constraints:
+  # y_i = X_i b+ - X_i b- + u_i - v_i
+  A <- cbind(X, -X, diag(n), -diag(n))
+  b <- y
+  
+  # Using A3 for equality here
+  result <- simplex(a = obj, A3 = A, b3 = b, maxi = TRUE)
+  
+  # Remember b+ is 1:p and b- is p+1:2p and y_i = X_i b+ - X_i b- + u_i - v_i
+  solution <- result$soln
+
+  b_plus <- solution[1:p]
+  b_minus <- solution[(p + 1):(2 * p)]
+
+  # Get final coefficients: beta = b+ - b- for xi
+  beta_hat <- b_plus - b_minus
+  
+  return (beta_hat)
+}
+
+
+y <- cannabis_df$t_mmr1
+X <- cbind(1, cannabis_df$p_change, cannabis_df$h_hr, cannabis_df$i_composite_score)
+tau <- 0.75
+
+my_rq(cannabis_df$t_mmr1, X, tau)
+```
+
 
 ## Problem 3: Implementation of LASSO
 
