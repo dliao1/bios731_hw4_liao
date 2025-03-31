@@ -21,6 +21,8 @@ library(cowplot)
 library(kableExtra)
 library(patchwork)
 library(pheatmap)
+library(quantreg)
+library(purrr)
 
 knitr::opts_chunk$set(
   echo = FALSE,
@@ -195,16 +197,25 @@ my_rq <- function(y, X, tau) {
   # Get final coefficients: beta = b+ - b- for xi
   beta_hat <- b_plus - b_minus
   
-  return (beta_hat)
+  beta_df <- as_tibble(as.list(beta_hat)) %>% 
+    mutate(tau = tau) %>%
+    rename(intercept = x1) %>%
+    select(tau, everything())
+    
+  
+  return (beta_df)
 }
 
 
 y <- cannabis_df$t_mmr1
 X <- cbind(1, cannabis_df$p_change, cannabis_df$h_hr, cannabis_df$i_composite_score)
-tau <- 0.75
+quantiles <- c(0.25, 0.5, 0.75)
 
-my_rq(cannabis_df$t_mmr1, X, tau)
+beta_map <- map_dfr(quantiles, ~ my_rq(y, X, .x), progress = TRUE)
+
+beta_map
 ```
+
 
 
 ## Problem 3: Implementation of LASSO
