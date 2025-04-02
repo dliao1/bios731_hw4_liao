@@ -24,14 +24,18 @@ library(broom)
 library(pheatmap)
 library(quantreg)
 library(purrr)
+library(LowRankQP)
+library(glmnet)
 
 knitr::opts_chunk$set(
   echo = FALSE,
   warning = FALSE,
   message = FALSE,
-  fig.width = 12,
-  fig.height = 5
+  fig.width = 16,
+  fig.height = 10
 )
+
+set.seed(2025)
 ```
 
 ## Context
@@ -43,6 +47,7 @@ This assignment reinforces ideas in Module 4: Constrained Optimization. We focus
 
 Please submit (via Canvas) a PDF containing a link to the web address of the GitHub repo containing your work for this assignment; git commits after the due date will cause the assignment to be considered late. Due date is Wednesday, 4/2 at 10:00AM.
 
+Repository link: https://github.com/dliao1/bios731_hw4_liao
 
 
 ## Points
@@ -91,8 +96,6 @@ Summarize key findings from your EDA in one paragraph and 2-3 figures or tables.
 
 ```{r}
 cannabis_df <- readRDS(here("data", "cannabis-2.rds"))
-
-cannabis_df
 ```
 
 ```{r}
@@ -129,25 +132,40 @@ ggplot(cannabis_df, aes(x = h_hr, y = t_mmr1,
   labs(title = "h_hr Colored Based on t_mmr1",
        x = "h_hr",
        y = "t_mmr1") +
-  theme_minimal()
+  theme_minimal(base_size = 16)
 
 
-ggplot(cannabis_df, aes(x = i_time_outside_reticle, y = t_mmr1, 
+ggplot(cannabis_df, aes(x = p_change, y = t_mmr1, 
                         color = ifelse(t_mmr1 > t_mmr1_median, "green", "red"))) +
   geom_point(size = 3) +
   scale_color_identity() +
-  labs(title = "i_time_outside_reticle Colored Based on t_mmr1",
-       x = "i_time_outside_reticle",
+  labs(title = "p_change Colored Based on t_mmr1",
+       x = "p_change",
        y = "t_mmr1") +
-  theme_minimal()
+  theme_minimal(base_size = 16)
 
 ```
 
-n is 57 for the 57 individuals in the dataset
-p is 27 for the number of predictors (columns in the dataset)
+### Summary 
 
-The distribution of the outcome is highly right skewed - looking at the histogram, it looks like the majority of values are 
-clustered by a metabolite molar ratio of THC of 0.
+To summarize, n is 57 for the 57 individuals in the dataset and p is 27 for 
+the number of predictors (covariates in the dataset). After
+creating a separate table of variables that had correlations higher than
+an absolute value of 0.5, it looks like most of the variables that had to do with
+the iPad neurocognitive tests were pretty strongly correlated - for example, i_rep_shapes34
+and i_composite_score had a strong negative correlation of -0.9 but i_memory_time34 
+and i_composite_score had a moderately positive correlation of 0.6. 
+
+The distribution of the outcome is highly right skewed - looking at the histogram, it looks like the 
+majority of values are clustered by a metabolite molar ratio of THC of 0. This is
+partly why I chose to include the two graphs plotting covariates like
+heart rate and p_change and colored points based on whether the 
+molar ratio of THC was 0 or not - there aren't many obvious linear trends,
+but it looks like the individuals with higher THC molar ratios 
+tended to have a larger spread of both both heart rates and percentage
+changes in pupil responses.
+
+
 
 ## Problem 2: Quantile regression
 
@@ -179,7 +197,7 @@ my_rq <- function(y, X, tau) {
   # We need 2*p instead of just p because we're splitting coefficients into
   # positive and negative
   
-               #0*b+         #0*b-    # t * ui      #(1 - t)vi
+  #0*b+         #0*b-    # t * ui      #(1 - t)vi
   obj <- -1 * c(rep(0, p), rep(0, p), rep(tau, n), rep(1 - tau, n))
   
   # Constraints:
@@ -192,10 +210,10 @@ my_rq <- function(y, X, tau) {
   
   # Remember b+ is 1:p and b- is p+1:2p and y_i = X_i b+ - X_i b- + u_i - v_i
   solution <- result$soln
-
+  
   b_plus <- solution[1:p]
   b_minus <- solution[(p + 1):(2 * p)]
-
+  
   # Get final coefficients: beta = b+ - b- for xi
   beta_hat <- b_plus - b_minus
   
@@ -203,7 +221,7 @@ my_rq <- function(y, X, tau) {
     mutate(tau = tau) %>%
     rename(intercept = x1) %>%
     select(tau, everything())
-    
+  
   
   return (beta_df)
 }
@@ -215,35 +233,50 @@ quantiles <- c(0.25, 0.5, 0.75)
 
 quantile_results <- map_dfr(quantiles, ~ my_rq(y, X, .x), progress = TRUE)
 
-quantile_results
+kable(quantile_results)
 ```
 
 ### Using rq() in R
 ```{r}
-tidy(rq(t_mmr1 ~ p_change + h_hr + i_composite_score, tau = quantiles, data = cannabis_df)) %>% 
+rq_results <- tidy(rq(t_mmr1 ~ p_change + h_hr + i_composite_score, tau = quantiles, data = cannabis_df)) %>% 
   select(term, estimate, tau) %>% 
   pivot_wider(
     names_from = term,
     values_from = estimate
   ) %>%
   select(tau, everything())
+
+kable(rq_results)
 ```
 
 ### OLS
 
 ```{r}
 ols = lm(t_mmr1 ~ p_change + h_hr + i_composite_score, data = cannabis_df)
-summary(ols)$coefficients
+#summary(ols)$coefficients
 
-tidy(lm(t_mmr1 ~ p_change + h_hr + i_composite_score, data = cannabis_df)) %>% 
+ols_results <- tidy(lm(t_mmr1 ~ p_change + h_hr + i_composite_score, data = cannabis_df)) %>% 
   select(term, estimate) %>% 
   pivot_wider(
     names_from = term,
     values_from = estimate
   ) %>%
   select(everything())
+
+kable(ols_results)
 ```
 
+### Summary
+
+Looking at the 3 summary tables for my implementation, rq(), and OLS, it looks
+like my implementation (that used the simplex function to solve the LP problem)
+and that of rq() generated the same results, but they different from the 
+output obtained using linear regression. It looks like at quantiles 0.25 and 0.5,
+quantile regression picks up on the positive associations of each of 
+p_change, h_hr, and i_composite_score with t_mmr1, but at a quantile of 0.75,
+the association of i_composite_score and t_mmr1 becomes negative, switching to -0.58.
+In contrast, the mean obtained using linear regression has smaller beta values,
+especially when we compare those with the results of quantile regression at the median (tau of 0.5).
 
 
 ## Problem 3: Implementation of LASSO
@@ -338,3 +371,89 @@ $Y$ (response), $X$ (predictor), and $lambda$ (tuning parameter), and return the
 * Summarize findings
 
 The results will not be exactly the same because the estimation procedures are different, but trends (which variables are selected) should be similar.
+
+```{r}
+my_lasso <- function(y, X, lambda) {
+  n <- length(y)
+  p <- ncol(X)
+  
+  X_prime <- cbind(X, -X)
+  
+  Vmat <- t(X_prime) %*% X_prime
+  dvec <- -t(X_prime) %*% y
+  
+  # We want sum of beta+ and beta- to be less than lambda
+  Amat <- t(c(rep(1, p), rep(1, p)))
+  bvec <- c(lambda)
+  uvec <- c(rep(100, p), rep(100, p))
+  
+  
+  fit <- LowRankQP(Vmat = Vmat,
+                   dvec = dvec,
+                   Amat = Amat,
+                   bvec = bvec,
+                   uvec = uvec) 
+  
+  # Extract beta = beta+ - beta-
+  beta_plus  <- fit$alpha[1:p]
+  beta_minus <- fit$alpha[(p + 1):(2 * p)]
+  
+  beta <- beta_plus - beta_minus
+  
+  return(beta)
+  
+}
+```
+
+
+```{r}
+y <- log(cannabis_df$t_mmr1 + 0.0001) # adds small value to avoid log(0) otherwise I get an error
+X <- cannabis_df %>%
+  select(-id, -t_mmr1) %>%
+  as.matrix()
+
+lambda <- 0.5
+my_lasso_results <- my_lasso(y, X, lambda)
+```
+
+```{r}
+glmnet_fit <- cv.glmnet(X, y)
+glmnet_results <- coef(glmnet_fit, s = "lambda.min")[-1]
+glmnet_fit$lambda.min
+```
+
+```{r}
+predictor_names <- colnames(X)
+lasso_vec <- setNames(as.numeric(my_lasso_results), predictor_names)
+glmnet_vec <- setNames(as.numeric(glmnet_results), predictor_names)
+
+comparison_df <- bind_rows(
+  lasso_vec,
+  glmnet_vec
+) %>%
+  mutate(method = c("my_lasso", "glmnet")) %>%
+  pivot_longer(
+    cols = -method,
+    names_to = "predictor",
+    values_to = "coefficient"
+  ) %>%
+  pivot_wider(
+    names_from = method,
+    values_from = coefficient
+  )
+
+kable(comparison_df, digits = 4)
+```
+
+
+
+### Summary
+
+After looking at the results of both my implementation of LASSO (with a lambda of 0.5) 
+and those of cv.glmnet, the predictors selected were mostly the same, with both
+models selecting p_fpc1, i_time_outside_reticle, and h_hr. Both models also
+only selected a few sparse predictors. However, it is interesting
+that i_prop_failed2 was selected in glmnet with a beta of -3.8, but not in my model,
+and it would be interesting to further analyze why.
+
+
