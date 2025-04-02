@@ -20,6 +20,7 @@ library(dplyr)
 library(cowplot)
 library(kableExtra)
 library(patchwork)
+library(broom)
 library(pheatmap)
 library(quantreg)
 library(purrr)
@@ -164,6 +165,7 @@ package).
 
 When explaining your results, be sure to explain what LP method you used for estimating quantile regression.
 
+### My Implementation
 
 ```{r}
 library(boot)
@@ -211,9 +213,35 @@ y <- cannabis_df$t_mmr1
 X <- cbind(1, cannabis_df$p_change, cannabis_df$h_hr, cannabis_df$i_composite_score)
 quantiles <- c(0.25, 0.5, 0.75)
 
-beta_map <- map_dfr(quantiles, ~ my_rq(y, X, .x), progress = TRUE)
+quantile_results <- map_dfr(quantiles, ~ my_rq(y, X, .x), progress = TRUE)
 
-beta_map
+quantile_results
+```
+
+### Using rq() in R
+```{r}
+tidy(rq(t_mmr1 ~ p_change + h_hr + i_composite_score, tau = quantiles, data = cannabis_df)) %>% 
+  select(term, estimate, tau) %>% 
+  pivot_wider(
+    names_from = term,
+    values_from = estimate
+  ) %>%
+  select(tau, everything())
+```
+
+### OLS
+
+```{r}
+ols = lm(t_mmr1 ~ p_change + h_hr + i_composite_score, data = cannabis_df)
+summary(ols)$coefficients
+
+tidy(lm(t_mmr1 ~ p_change + h_hr + i_composite_score, data = cannabis_df)) %>% 
+  select(term, estimate) %>% 
+  pivot_wider(
+    names_from = term,
+    values_from = estimate
+  ) %>%
+  select(everything())
 ```
 
 
@@ -227,6 +255,78 @@ As illustrated in class, a LASSO problem can be rewritten as a quadratic program
 order term to be positive definite (such as `solve.QP` in the `quadprog` package). Rewrite the
 quadratic programming problem for LASSO in matrix form and show that the matrix is not
 positive definite, thus QP solvers like `solve.QP` cannot be used. 
+
+
+From slide 27 of the lecture slides, we are trying to max:
+
+
+$$
+\max_{\beta_j^+, \beta_j^-} - \sum_i \left( y_i - \sum_j \beta_j^+ x_{ij} + \sum_j \beta_j^- x_{ij} \right)^2 \\
+\text{s.t.} \sum_j \left( \beta_j^+ + \beta_j^- \right) \leq \lambda, \\
+\beta_j^+, \beta_j^- \geq 0
+$$
+
+If we factor the $x_{ij}$ , we get 
+$$
+- \sum_i \left( y_i - \left [ x_{ij} (\sum_j (\beta_j^+  +\beta_j^-) \right ] \right)^2 
+$$
+
+Putting it into matrix form and redistributing, we get:
+
+$$
+(Y - \left [X(\beta_j^+ - \beta_j^-) \right ])^T(Y - \left [X(\beta_j^+ - \beta_j^-) \right ])
+$$
+
+$$
+(Y - \left [X\beta_j^+ - X\beta_j^- \right ])^T(Y - \left [X\beta_j^+ - X\beta_j^- \right ])
+$$
+
+Defining new matrices:
+$$
+X' = 
+\begin{bmatrix}
+X \\
+- X
+\end{bmatrix}
+$$
+
+$$
+\beta' = 
+\begin{bmatrix}
+\beta_j^+ \\
+\beta_j^-
+\end{bmatrix}
+$$
+
+we can rewrite as:
+
+$$
+(Y - X'\beta')^T(Y - X'\beta')
+$$
+
+Expanding, we can see that $\beta'^T X'^T X' \beta'$ is the second order term. Substituting back 
+in our matrix definition of $X'$, we see that:
+
+$$
+\begin{aligned}
+(Y - X'\beta')^T(Y - X'\beta') 
+&= Y^T Y - 2 Y^T X' \beta' + \beta'^T X'^T X' \beta' \\
+&= Y^T Y - 2 Y^T X' \beta' + \beta'^T 
+\begin{bmatrix}
+X^T X & -X^T X \\
+- X^T X & X^T X
+\end{bmatrix}
+\beta'
+\end{aligned}
+$$
+
+
+
+We can see that the determinant of this matrix is going to be 0 - by definition,
+the determinant of a positive definite matrix is not 0, hence, this matrix is 
+not positive definite.
+
+
 2. The `LowRankQP` function in the `LowRankQP` package can handle the non positive definite situation. Use the
 matrix format you derived above and `LowRankQP` to write your own function `my_lasso()` to
 estimate the coefficients for a LASSO problem. Your function needs to take three parameters:
