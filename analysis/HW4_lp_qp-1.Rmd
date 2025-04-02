@@ -23,6 +23,7 @@ library(patchwork)
 library(broom)
 library(pheatmap)
 library(quantreg)
+library(boot)
 library(purrr)
 library(LowRankQP)
 library(glmnet)
@@ -36,6 +37,9 @@ knitr::opts_chunk$set(
 )
 
 set.seed(2025)
+
+source(here("source", "my_lasso.R"))
+source(here("source", "my_rq.R"))
 ```
 
 ## Context
@@ -186,47 +190,6 @@ When explaining your results, be sure to explain what LP method you used for est
 ### My Implementation
 
 ```{r}
-library(boot)
-my_rq <- function(y, X, tau) {
-  n <- length(y)
-  p <- ncol(X)
-  
-  # See slide 16 of class notes
-  # u <- [yi - xi*beta]+
-  # v <- [yi - xi*beta]-
-  # We need 2*p instead of just p because we're splitting coefficients into
-  # positive and negative
-  
-  #0*b+         #0*b-    # t * ui      #(1 - t)vi
-  obj <- -1 * c(rep(0, p), rep(0, p), rep(tau, n), rep(1 - tau, n))
-  
-  # Constraints:
-  # y_i = X_i b+ - X_i b- + u_i - v_i
-  A <- cbind(X, -X, diag(n), -diag(n))
-  b <- y
-  
-  # Using A3 for equality here
-  result <- simplex(a = obj, A3 = A, b3 = b, maxi = TRUE)
-  
-  # Remember b+ is 1:p and b- is p+1:2p and y_i = X_i b+ - X_i b- + u_i - v_i
-  solution <- result$soln
-  
-  b_plus <- solution[1:p]
-  b_minus <- solution[(p + 1):(2 * p)]
-  
-  # Get final coefficients: beta = b+ - b- for xi
-  beta_hat <- b_plus - b_minus
-  
-  beta_df <- as_tibble(as.list(beta_hat)) %>% 
-    mutate(tau = tau) %>%
-    rename(intercept = x1) %>%
-    select(tau, everything())
-  
-  
-  return (beta_df)
-}
-
-
 y <- cannabis_df$t_mmr1
 X <- cbind(1, cannabis_df$p_change, cannabis_df$h_hr, cannabis_df$i_composite_score)
 quantiles <- c(0.25, 0.5, 0.75)
@@ -371,40 +334,6 @@ $Y$ (response), $X$ (predictor), and $lambda$ (tuning parameter), and return the
 * Summarize findings
 
 The results will not be exactly the same because the estimation procedures are different, but trends (which variables are selected) should be similar.
-
-```{r}
-my_lasso <- function(y, X, lambda) {
-  n <- length(y)
-  p <- ncol(X)
-  
-  X_prime <- cbind(X, -X)
-  
-  Vmat <- t(X_prime) %*% X_prime
-  dvec <- -t(X_prime) %*% y
-  
-  # We want sum of beta+ and beta- to be less than lambda
-  Amat <- t(c(rep(1, p), rep(1, p)))
-  bvec <- c(lambda)
-  uvec <- c(rep(100, p), rep(100, p))
-  
-  
-  fit <- LowRankQP(Vmat = Vmat,
-                   dvec = dvec,
-                   Amat = Amat,
-                   bvec = bvec,
-                   uvec = uvec) 
-  
-  # Extract beta = beta+ - beta-
-  beta_plus  <- fit$alpha[1:p]
-  beta_minus <- fit$alpha[(p + 1):(2 * p)]
-  
-  beta <- beta_plus - beta_minus
-  
-  return(beta)
-  
-}
-```
-
 
 ```{r}
 y <- log(cannabis_df$t_mmr1 + 0.0001) # adds small value to avoid log(0) otherwise I get an error
